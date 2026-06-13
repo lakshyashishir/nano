@@ -1,0 +1,3 @@
+# Optional: raises GitHub API rate limit from 60/hr to 5000/hr
+# Create at https://github.com/settings/tokens (public repo scope is enough)
+GITHUB_TOKEN=
