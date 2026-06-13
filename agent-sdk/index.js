@@ -34,12 +34,15 @@ export class NanoClient {
     return new NanoClient(baseUrl, data.apiKey);
   }
 
-  async pollTask() {
-    const agent = await this.request('/api/agents');
-    const self = agent.agents?.find((a) => true);
-    // Get agent id from a lightweight approach - poll pending tasks
-    const { tasks } = await this.request('/api/tasks?status=pending');
+  async pollTask(options = {}) {
+    const params = new URLSearchParams({ status: 'pending' });
+    if (options.runner) params.set('runner', options.runner);
+    const { tasks } = await this.request(`/api/tasks?${params}`);
     return tasks[0] ?? null;
+  }
+
+  get apiKeyValue() {
+    return this.apiKey;
   }
 
   async claimTask(taskId) {
@@ -79,6 +82,10 @@ export class NanoClient {
       method: 'PATCH',
       body: JSON.stringify({ status: 'completed', result }),
     });
+  }
+
+  async heartbeat() {
+    return this.request('/api/agents/heartbeat', { method: 'POST' });
   }
 
   async failTask(taskId, result) {

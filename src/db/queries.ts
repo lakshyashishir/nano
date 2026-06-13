@@ -43,6 +43,21 @@ export async function createAgent(
   return { agent: toAgentPublic(agent), apiKey };
 }
 
+export async function updateAgentLastActive(db: D1Database, id: string): Promise<void> {
+  await db.prepare('UPDATE agents SET last_active = ? WHERE id = ?').bind(Date.now(), id).run();
+}
+
+export async function countOnlineRunners(db: D1Database, withinMs = 90000): Promise<number> {
+  const since = Date.now() - withinMs;
+  const row = await db
+    .prepare(
+      "SELECT COUNT(*) as count FROM agents WHERE type != 'cloud' AND last_active >= ?"
+    )
+    .bind(since)
+    .first<{ count: number }>();
+  return row?.count ?? 0;
+}
+
 export async function updateAgentStatus(db: D1Database, id: string, status: string): Promise<void> {
   await db
     .prepare('UPDATE agents SET status = ?, last_active = ? WHERE id = ?')
@@ -52,7 +67,7 @@ export async function updateAgentStatus(db: D1Database, id: string, status: stri
 
 export async function listTasks(
   db: D1Database,
-  filters: { agent_id?: string; status?: string }
+  filters: { agent_id?: string; status?: string; runner?: string }
 ): Promise<Task[]> {
   let query = 'SELECT * FROM tasks WHERE 1=1';
   const binds: string[] = [];
@@ -63,6 +78,10 @@ export async function listTasks(
   if (filters.status) {
     query += ' AND status = ?';
     binds.push(filters.status);
+  }
+  if (filters.runner) {
+    query += " AND COALESCE(runner, 'cloud') = ?";
+    binds.push(filters.runner);
   }
   query += ' ORDER BY created_at DESC LIMIT 100';
   const stmt = db.prepare(query);
@@ -84,14 +103,16 @@ export async function createTask(
     github_repo?: string;
     github_branch?: string;
     github_url?: string;
+    runner?: string;
   }
 ): Promise<Task> {
   const id = crypto.randomUUID();
   const now = Date.now();
+  const runner = data.runner === 'local' ? 'local' : 'cloud';
   await db
     .prepare(
-      `INSERT INTO tasks (id, agent_id, description, status, priority, github_owner, github_repo, github_branch, github_url, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO tasks (id, agent_id, description, status, priority, github_owner, github_repo, github_branch, github_url, runner, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       id,
@@ -103,6 +124,7 @@ export async function createTask(
       data.github_repo ?? null,
       data.github_branch ?? null,
       data.github_url ?? null,
+      runner,
       now
     )
     .run();
@@ -250,9 +272,13 @@ export async function resolveApproval(
 }
 
 export async function getDashboardStats(db: D1Database) {
-  const [agents, pendingTasks, pendingApprovals, completedToday] = await Promise.all([
+  const [agents, pendingTasks, pendingLocalTasks, pendingApprovals, completedToday, onlineRunners] =
+    await Promise.all([
     db.prepare('SELECT COUNT(*) as count FROM agents').first<{ count: number }>(),
     db.prepare("SELECT COUNT(*) as count FROM tasks WHERE status = 'pending'").first<{ count: number }>(),
+    db
+      .prepare("SELECT COUNT(*) as count FROM tasks WHERE status = 'pending' AND runner = 'local'")
+      .first<{ count: number }>(),
     db.prepare("SELECT COUNT(*) as count FROM approvals WHERE status = 'pending'").first<{ count: number }>(),
     db
       .prepare(
@@ -260,11 +286,14 @@ export async function getDashboardStats(db: D1Database) {
       )
       .bind(Date.now() - 86400000)
       .first<{ count: number }>(),
+    countOnlineRunners(db),
   ]);
   return {
     agents: agents?.count ?? 0,
     pendingTasks: pendingTasks?.count ?? 0,
+    pendingLocalTasks: pendingLocalTasks?.count ?? 0,
     pendingApprovals: pendingApprovals?.count ?? 0,
     completedToday: completedToday?.count ?? 0,
+    onlineRunners,
   };
 }

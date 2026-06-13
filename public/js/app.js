@@ -10,6 +10,7 @@ const state = {
   stats: {},
   selectedAgentId: null,
   selectedRepo: null,
+  selectedRunner: 'cloud',
   wsConnected: false,
   repoSearchTimer: null,
 };
@@ -58,37 +59,60 @@ function setView(name) {
   render();
 }
 
+function voidEmpty(title, desc) {
+  return `<div class="void-empty"><div class="void-glyph" aria-hidden="true"></div><h3>${title}</h3><p>${desc}</p></div>`;
+}
+
+function isAgentOnline(a) {
+  if (a.type === 'cloud') return true;
+  return Date.now() - a.last_active < 90000;
+}
+
 function renderStats() {
   const s = state.stats;
+  const runners = s.onlineRunners ?? 0;
   $('#stats-row').innerHTML = `
-    <div class="stat"><div class="num">${s.agents ?? 0}</div><div class="lbl">Agents</div></div>
-    <div class="stat"><div class="num">${s.pendingTasks ?? 0}</div><div class="lbl">Queued</div></div>
-    <div class="stat"><div class="num">${s.pendingApprovals ?? 0}</div><div class="lbl">Approve</div></div>
-    <div class="stat"><div class="num">${s.completedToday ?? 0}</div><div class="lbl">Done</div></div>`;
+    <div class="stat-cell"><div class="stat-num">${s.agents ?? 0}</div><div class="stat-lbl">Agents</div></div>
+    <div class="stat-cell"><div class="stat-num">${runners}</div><div class="stat-lbl">Runners</div></div>
+    <div class="stat-cell"><div class="stat-num">${s.pendingApprovals ?? 0}</div><div class="stat-lbl">Veto</div></div>
+    <div class="stat-cell"><div class="stat-num">${s.completedToday ?? 0}</div><div class="stat-lbl">Done</div></div>`;
+
+  const banner = $('#runner-banner');
+  if (banner) {
+    const waiting = s.pendingLocalTasks ?? 0;
+    if (state.selectedRunner === 'local' || waiting > 0) {
+      banner.style.display = 'flex';
+      banner.innerHTML =
+        runners > 0
+          ? `<span class="tape-tag">RUN</span><span><strong>${runners} runner(s) online</strong>${waiting ? ` · ${waiting} local queued` : ''}</span>`
+          : `<span class="tape-tag">OFF</span><span><strong>No local runner</strong> — run <code>npm run agent:claude</code></span>`;
+    } else {
+      banner.style.display = 'none';
+    }
+  }
 }
 
 function renderAgents() {
   const el = $('#agents-list');
   if (!state.agents.length) {
-    el.innerHTML = `
-      <div class="hero-card">
-        <div class="emoji">☁️</div>
-        <h3>Cloud agent ready</h3>
-        <p>Create a task with a GitHub repo — the built-in agent starts automatically. No terminal needed.</p>
-      </div>`;
+    el.innerHTML = voidEmpty('NO AGENTS', 'Cloud agent is always on. Register a local runner with npm run agent:claude.');
     return;
   }
-  el.innerHTML = state.agents.map((a) => `
+  el.innerHTML = state.agents.map((a) => {
+    const online = isAgentOnline(a);
+    return `
     <div class="card interactive" data-agent="${a.id}">
       <div class="card-top">
         <div class="card-title">${escapeHtml(a.name)}</div>
         <span class="badge ${a.status}">${a.status}</span>
       </div>
       <div class="card-meta">
-        <span class="badge cloud">${escapeHtml(a.type)}</span>
-        <span>Active ${formatTime(a.last_active)}</span>
+        <span class="live-dot ${online ? 'on' : 'off'}" style="width:8px;height:8px"></span>
+        <span class="badge ${a.type === 'cloud' ? 'cloud' : 'local'}">${escapeHtml(a.type)}</span>
+        <span>${online ? 'Online' : 'Offline'} · ${formatTime(a.last_active)}</span>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   el.querySelectorAll('[data-agent]').forEach((card) => {
     card.onclick = () => {
@@ -102,13 +126,16 @@ function renderAgents() {
 function renderTasks() {
   const el = $('#tasks-list');
   if (!state.tasks.length) {
-    el.innerHTML = `<div class="hero-card"><div class="emoji">📋</div><h3>No tasks yet</h3><p>Pick a GitHub repo and describe what to change.</p></div>`;
+    el.innerHTML = voidEmpty('EMPTY QUEUE', 'Pick a GitHub repo and write a directive.');
     return;
   }
   el.innerHTML = state.tasks.map((t) => {
     const repo = t.github_owner && t.github_repo
       ? { owner: t.github_owner, repo: t.github_repo, full_name: `${t.github_owner}/${t.github_repo}` }
       : null;
+    const runner = t.runner === 'local' ? 'local' : 'cloud';
+    const runnerBadge = `<span class="badge ${runner === 'local' ? 'local' : 'cloud'}" style="font-size:0.65rem">${runner === 'local' ? 'claude' : 'cloud'}</span>`;
+    const waitingRunner = t.status === 'pending' && runner === 'local';
     let resultHtml = '';
     if (t.result) {
       try {
@@ -116,10 +143,11 @@ function renderTasks() {
         const links = [];
         if (r.branchUrl) links.push(`<a href="${escapeHtml(r.branchUrl)}" target="_blank" rel="noopener">branch</a>`);
         if (r.commitUrl) links.push(`<a href="${escapeHtml(r.commitUrl)}" target="_blank" rel="noopener">commit</a>`);
+        if (r.prUrl) links.push(`<a href="${escapeHtml(r.prUrl)}" target="_blank" rel="noopener">pull request</a>`);
         const linkHtml = links.length ? `<div class="task-links">${links.join(' · ')}</div>` : '';
-        resultHtml = `<div class="card-meta" style="margin-top:8px;color:var(--success)">${escapeHtml(r.summary || '')}</div>${linkHtml}`;
+        resultHtml = `<div class="card-meta" style="margin-top:8px;color:var(--ok)">${escapeHtml(r.summary || '')}</div>${linkHtml}`;
         if (r.analysisOnly) {
-          resultHtml += `<div class="card-meta" style="margin-top:4px;color:var(--warning)">Analysis only — no branch created</div>`;
+          resultHtml += `<div class="card-meta" style="margin-top:4px;color:var(--warn)">Analysis only — no branch created</div>`;
         }
       } catch { /* ignore */ }
     }
@@ -127,10 +155,10 @@ function renderTasks() {
     <div class="card">
       <div class="card-top">
         <span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>
-        <span style="font-size:0.72rem;color:var(--text-tertiary)">${formatTime(t.created_at)}</span>
+        <span style="font-size:0.68rem;color:var(--text-ghost)">${formatTime(t.created_at)}</span>
       </div>
       <div class="card-title" style="margin-top:8px">${escapeHtml(t.description)}</div>
-      <div class="card-meta">${repo ? repoChip(repo) : ''}</div>
+      <div class="card-meta">${repo ? repoChip(repo) : ''} ${runnerBadge}${waitingRunner ? ' <span class="badge waiting">waiting for runner</span>' : ''}</div>
       ${resultHtml}
     </div>`;
   }).join('');
@@ -148,7 +176,7 @@ function renderApprovals() {
 
   const el = $('#approvals-list');
   if (!pending.length) {
-    el.innerHTML = `<div class="hero-card"><div class="emoji">✓</div><h3>All clear</h3><p>Destructive actions will appear here for your approval.</p></div>`;
+    el.innerHTML = voidEmpty('ALL CLEAR', 'Destructive actions will surface here for veto.');
     return;
   }
 
@@ -161,8 +189,8 @@ function renderApprovals() {
         ${d.repo ? `<div>${repoChip({ full_name: d.repo, avatar_url: '' })}</div>` : ''}
         <p style="margin-top:8px">${escapeHtml(d.action || d.task || '')}</p>
         ${d.affectedPaths ? `<pre>${escapeHtml(d.affectedPaths.join('\n'))}</pre>` : ''}
-        ${d.canWrite === false ? `<p class="card-meta" style="color:var(--warning);margin-top:8px">Read-only — will analyze only, no branch created</p>` : ''}
-        ${d.canWrite ? `<p class="card-meta" style="color:var(--success);margin-top:8px">Writable — will create branch + commit plan</p>` : ''}
+        ${d.canWrite === false ? `<p class="card-meta" style="color:var(--warn);margin-top:8px">Read-only — analyze only</p>` : ''}
+        ${d.canWrite ? `<p class="card-meta" style="color:var(--ok);margin-top:8px">Writable — branch, commit, PR</p>` : ''}
       </div>
       <div class="btn-row">
         <button class="btn btn-success" data-approve="${a.id}">Approve</button>
@@ -194,7 +222,7 @@ function renderLogs(containerId) {
   const el = document.getElementById(id);
   if (!el) return;
   if (!state.logs.length) {
-    el.innerHTML = `<div style="color:var(--text-tertiary);text-align:center;padding:40px 16px">Waiting for agent output…</div>`;
+    el.innerHTML = `<div class="repo-empty" style="padding:48px 16px">AWAITING SIGNAL…</div>`;
     return;
   }
   el.innerHTML = state.logs.map((l) =>
@@ -280,9 +308,9 @@ function selectRepo(repo) {
     <img src="${repo.avatar_url}" alt="" />
     <div class="info">
       <div class="name">${escapeHtml(repo.full_name)}${writeBadge(repo)}</div>
-      <div class="desc">${escapeHtml(repo.description || 'No description')} · ★ ${(repo.stargazers_count || 0).toLocaleString()}</div>
+      <div class="desc">${escapeHtml(repo.description || 'No description')} · ${(repo.stargazers_count || 0).toLocaleString()} stars</div>
     </div>
-    <button class="btn-ghost" id="clear-repo" style="width:auto;padding:6px 10px;font-size:0.75rem">✕</button>`;
+    <button class="btn-ghost" id="clear-repo" style="width:auto;padding:6px 10px;font-size:0.58rem;letter-spacing:0.1em">CLR</button>`;
   $('#clear-repo').onclick = () => {
     state.selectedRepo = null;
     sel.style.display = 'none';
@@ -296,7 +324,7 @@ function updateSubmitBtn() {
   const btn = $('#submit-task-btn');
   if (state.selectedRepo) {
     btn.disabled = false;
-    btn.textContent = `Run on ${state.selectedRepo.full_name}`;
+    btn.textContent = `EXECUTE · ${state.selectedRepo.full_name}`;
   } else {
     btn.disabled = true;
     btn.textContent = 'Select a repo to continue';
@@ -314,7 +342,7 @@ function renderRepoList(repos) {
       <img src="${r.avatar_url}" alt="" loading="lazy" />
       <div class="info">
         <div class="name">${escapeHtml(r.full_name)}${writeBadge(r)}</div>
-        <div class="meta">★ ${(r.stargazers_count || 0).toLocaleString()} · ${escapeHtml(r.language || '—')}</div>
+        <div class="meta">${(r.stargazers_count || 0).toLocaleString()} stars · ${escapeHtml(r.language || '—')}</div>
       </div>
     </div>`).join('');
 
@@ -328,15 +356,19 @@ function renderRepoList(repos) {
 
 async function loadSuggestions() {
   try {
-    const { repos } = await nanoApi.getSuggestions();
+    const { repos, defaultRepo } = await nanoApi.getSuggestions();
     const el = $('#repo-suggestions');
     el.innerHTML = repos.map((r) => `
-      <button class="suggestion-chip" data-full="${escapeHtml(r.full_name)}">
-        <img src="${r.avatar_url}" alt="" />${escapeHtml(r.repo)}
+      <button class="suggestion-chip${r.full_name === defaultRepo ? ' active' : ''}" data-full="${escapeHtml(r.full_name)}">
+        <img src="${r.avatar_url}" alt="" />${escapeHtml(r.repo)}${r.full_name === 'lakshyashishir/test-for-hack' ? '<span class="chip-tag">SANDBOX</span>' : ''}
       </button>`).join('');
     el.querySelectorAll('.suggestion-chip').forEach((chip) => {
       chip.onclick = () => selectRepo(repos.find((r) => r.full_name === chip.dataset.full));
     });
+    const pick = repos.find((r) => r.full_name === defaultRepo) || repos[0];
+    if (pick && state.view === 'new-task' && !state.selectedRepo) {
+      selectRepo(pick);
+    }
   } catch { /* optional */ }
 }
 
@@ -378,6 +410,22 @@ function setupRepoSearch() {
   });
 }
 
+function setupRunnerPicker() {
+  const hints = {
+    cloud: 'Cloud — fast template commits on GitHub. No terminal.',
+    local: 'Claude Code — run `npm run agent:claude` on your Mac. Real code edits + PR.',
+  };
+  document.querySelectorAll('.runner-opt').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.selectedRunner = btn.dataset.runner;
+      document.querySelectorAll('.runner-opt').forEach((b) => b.classList.toggle('active', b === btn));
+      const hint = $('#runner-hint');
+      if (hint) hint.textContent = hints[state.selectedRunner] || hints.cloud;
+      renderStats();
+    });
+  });
+}
+
 function setupTaskForm() {
   $('#submit-task-btn').addEventListener('click', async () => {
     const description = $('#task-description').value.trim();
@@ -404,9 +452,11 @@ function setupTaskForm() {
         github_branch: repo.default_branch,
         github_url: repo.html_url,
         priority: parsed.parsed?.priority,
+        runner: state.selectedRunner,
       });
 
-      showToast(`Agent running on ${repo.full_name}`);
+      const runnerLabel = state.selectedRunner === 'local' ? 'Claude Code' : 'Cloud agent';
+      showToast(`${runnerLabel} queued on ${repo.full_name}`);
       $('#task-description').value = '';
       state.selectedRepo = null;
       $('#repo-selected').style.display = 'none';
@@ -417,14 +467,20 @@ function setupTaskForm() {
       showToast(err.message);
     } finally {
       btn.disabled = !state.selectedRepo;
-      btn.textContent = state.selectedRepo ? `Run on ${state.selectedRepo.full_name}` : 'Select a repo to continue';
+      btn.textContent = state.selectedRepo ? `EXECUTE · ${state.selectedRepo.full_name}` : 'SELECT REPO';
     }
   });
 }
 
 function setupNav() {
   document.querySelectorAll('.nav-btn').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
-  $('#btn-new-task').onclick = () => setView('new-task');
+  $('#btn-new-task').onclick = () => {
+    state.selectedRepo = null;
+    $('#repo-selected').style.display = 'none';
+    updateSubmitBtn();
+    setView('new-task');
+    loadSuggestions();
+  };
   $('#back-home').onclick = () => setView('dashboard');
   $('#back-agents').onclick = () => setView('dashboard');
   $('#summarize-logs-btn')?.addEventListener('click', async () => {
@@ -466,6 +522,7 @@ function setupWebSocket() {
 async function init() {
   setupNav();
   setupRepoSearch();
+  setupRunnerPicker();
   setupTaskForm();
   setupWebSocket();
   await nanoApi.bootstrap().catch(() => {});

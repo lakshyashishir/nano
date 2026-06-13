@@ -1,10 +1,12 @@
 import { Hono } from 'hono';
+import { TEST_REPO } from '../config';
 import {
   fetchRepo,
   parseGitHubUrl,
   searchRepos,
   listRepoContents,
   listUserRepos,
+  seedEmptyRepo,
 } from '../lib/github';
 import type { Env } from '../types';
 
@@ -45,38 +47,68 @@ githubApi.get('/repo/:owner/:repo', async (c) => {
   }
 });
 
-// User's writable repos first, then public suggestions
+githubApi.post('/seed-test-repo', async (c) => {
+  const token = c.env.GITHUB_TOKEN;
+  if (!token) return c.json({ error: 'GITHUB_TOKEN required' }, 400);
+  try {
+    const seeded = await seedEmptyRepo(TEST_REPO.owner, TEST_REPO.repo, token);
+    const repo = await fetchRepo(TEST_REPO.owner, TEST_REPO.repo, token);
+    return c.json({ seeded, repo });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 502);
+  }
+});
+
+// Test sandbox first, then user's writable repos
 githubApi.get('/suggestions', async (c) => {
   const token = c.env.GITHUB_TOKEN;
+  const repos: Awaited<ReturnType<typeof fetchRepo>>[] = [];
+  let defaultRepo = TEST_REPO.full_name;
+
   if (token) {
     try {
+      await seedEmptyRepo(TEST_REPO.owner, TEST_REPO.repo, token);
+    } catch { /* repo may already exist */ }
+    try {
+      const testRepo = await fetchRepo(TEST_REPO.owner, TEST_REPO.repo, token);
+      repos.push(testRepo);
+    } catch { /* ignore */ }
+
+    try {
       const mine = await listUserRepos(token);
-      const writable = mine.filter((r) => r.permissions?.push);
-      if (writable.length) return c.json({ repos: writable.slice(0, 8), source: 'user' });
-      if (mine.length) return c.json({ repos: mine.slice(0, 8), source: 'user' });
+      for (const r of mine) {
+        if (r.full_name !== TEST_REPO.full_name) repos.push(r);
+      }
     } catch { /* fall through */ }
   }
+
+  if (repos.length) {
+    return c.json({ repos: repos.slice(0, 8), source: 'test+sandbox', defaultRepo });
+  }
+
   try {
-    const repos = await searchRepos('cloudflare workers-sdk stars:>1000', token);
-    const picks = repos.slice(0, 6);
-    if (picks.length) return c.json({ repos: picks, source: 'search' });
+    const picks = (await searchRepos('stars:>100', token)).slice(0, 4);
+    if (picks.length) return c.json({ repos: picks, source: 'search', defaultRepo: picks[0]?.full_name });
   } catch { /* fall through */ }
+
   return c.json({
     source: 'fallback',
+    defaultRepo: TEST_REPO.full_name,
     repos: [
       {
-        owner: 'cloudflare',
-        repo: 'workers-sdk',
-        full_name: 'cloudflare/workers-sdk',
-        html_url: 'https://github.com/cloudflare/workers-sdk',
+        owner: TEST_REPO.owner,
+        repo: TEST_REPO.repo,
+        full_name: TEST_REPO.full_name,
+        html_url: TEST_REPO.html_url,
         default_branch: 'main',
-        description: 'Cloudflare Workers SDK',
-        language: 'TypeScript',
+        description: 'Nano PR test sandbox',
+        language: null,
         stargazers_count: 0,
         forks_count: 0,
         open_issues_count: 0,
         topics: [],
         avatar_url: 'https://avatars.githubusercontent.com/u/314135?s=64',
+        permissions: { push: true, admin: true },
       },
     ],
   });

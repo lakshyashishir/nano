@@ -1,13 +1,13 @@
 /**
- * Mock coding agent for Harness POC demo.
+ * Mock coding agent for Nano POC demo.
  *
  * Usage:
- *   HARNESS_URL=http://127.0.0.1:8787 node examples/mock-agent.js
+ *   NANO_URL=http://127.0.0.1:8787 node examples/mock-agent.js
  */
 
-import HarnessClient from '../index.js';
+import NanoClient from '../index.js';
 
-const BASE_URL = process.env.HARNESS_URL || 'http://127.0.0.1:8787';
+const BASE_URL = process.env.NANO_URL || process.env.HARNESS_URL || 'http://127.0.0.1:8787';
 const POLL_MS = 2000;
 
 async function runDemoTask(client, task) {
@@ -67,16 +67,16 @@ function sleep(ms) {
 }
 
 async function main() {
-  console.log(`🔗 Connecting to Harness at ${BASE_URL}`);
+  console.log(`🔗 Connecting to Nano at ${BASE_URL}`);
 
   let client;
-  const savedKey = process.env.HARNESS_API_KEY;
+  const savedKey = process.env.NANO_API_KEY || process.env.HARNESS_API_KEY;
 
   if (savedKey) {
-    client = new HarnessClient(BASE_URL, savedKey);
-    console.log('Using existing API key from HARNESS_API_KEY');
+    client = new NanoClient(BASE_URL, savedKey);
+    console.log('Using existing API key from NANO_API_KEY');
   } else {
-    client = await HarnessClient.register(BASE_URL, {
+    client = await NanoClient.register(BASE_URL, {
       name: 'Mock Agent — Demo',
       type: 'mock',
       metadata: { version: '0.1.0', capabilities: ['code', 'file_ops', 'git'] },

@@ -8,15 +8,17 @@ import {
 } from '../db/queries';
 import { requireAgentAuth } from '../middleware/auth';
 import { runBuiltinTask } from '../builtin-agent';
+import { wakeLocalRunner } from '../lib/runner-wake';
 import type { Agent, Env } from '../types';
 import { broadcast } from '../ws';
 
-export const tasksApi = new Hono<{ Bindings: Env; Variables: { agent: Agent } }>();
+export const tasksApi = new Hono<{ Bindings: Env & { GITHUB_TOKEN?: string; RUNNER_WAKE_URL?: string }; Variables: { agent: Agent } }>();
 
 tasksApi.get('/', async (c) => {
   const agent_id = c.req.query('agent_id');
   const status = c.req.query('status');
-  const tasks = await listTasks(c.env.DB, { agent_id, status });
+  const runner = c.req.query('runner');
+  const tasks = await listTasks(c.env.DB, { agent_id, status, runner });
   return c.json({ tasks });
 });
 
@@ -29,6 +31,7 @@ tasksApi.post('/', async (c) => {
     github_repo?: string;
     github_branch?: string;
     github_url?: string;
+    runner?: 'cloud' | 'local';
   }>();
   if (!body.description?.trim()) {
     return c.json({ error: 'description is required' }, 400);
@@ -40,8 +43,12 @@ tasksApi.post('/', async (c) => {
   const task = await createTask(c.env.DB, body);
   await broadcast(c.env, { type: 'task_updated', task });
 
-  // Auto-run built-in cloud agent (real GitHub fetch — no separate terminal needed)
-  c.executionCtx.waitUntil(runBuiltinTask(c.env, task.id, c.env.GITHUB_TOKEN));
+  const runner = task.runner === 'local' ? 'local' : 'cloud';
+  if (runner === 'cloud') {
+    c.executionCtx.waitUntil(runBuiltinTask(c.env, task.id, c.env.GITHUB_TOKEN));
+  } else {
+    c.executionCtx.waitUntil(wakeLocalRunner(c.env, task));
+  }
 
   return c.json({ task }, 201);
 });

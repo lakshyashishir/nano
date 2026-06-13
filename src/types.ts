@@ -40,6 +40,7 @@ export interface Task {
   github_repo: string | null;
   github_branch: string | null;
   github_url: string | null;
+  runner: string | null;
   created_at: number;
   started_at: number | null;
   completed_at: number | null;
@@ -71,9 +72,9 @@ export interface Approval {
 export interface Env {
   DB: D1Database;
   AGENT_SESSION: DurableObjectNamespace;
-  AI: Ai;
   ASSETS: Fetcher;
   GITHUB_TOKEN?: string;
+  RUNNER_WAKE_URL?: string;
 }
 
 export type WsEvent =

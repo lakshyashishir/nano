@@ -3,119 +3,156 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#7c6cff" />
+  <meta name="theme-color" content="#030303" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Nano</title>
   <link rel="manifest" href="/manifest.json" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles/main.css" />
 </head>
 <body>
+  <div class="scanlines" aria-hidden="true"></div>
+  <div class="grid-bg" aria-hidden="true"></div>
+
   <header class="app-header">
     <div class="brand">
-      <div class="brand-icon">N</div>
-      <div>
-        <h1>Nano</h1>
-        <span>Agent control center</span>
+      <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="brand-text">
+        <h1>NANO</h1>
+        <span class="brand-sub">CONTROL DECK</span>
       </div>
     </div>
-    <div class="live-pill" id="ws-status">
-      <span class="live-dot off" id="ws-dot"></span>
-      <span id="ws-label">Connecting</span>
+    <div class="signal-pill" id="ws-status">
+      <span class="signal-dot off" id="ws-dot"></span>
+      <span class="signal-label" id="ws-label">SYNC</span>
     </div>
   </header>
 
   <main>
-    <!-- Dashboard -->
     <section id="view-dashboard" class="view active">
-      <div class="info-banner">
-        <span>⚡</span>
-        <span><strong>Real GitHub data</strong> — pick a repo, assign a task, and the built-in cloud agent fetches live repo info. Approve changes from your phone.</span>
+      <div class="tape tape-info">
+        <span class="tape-tag">SYS</span>
+        <span>Sandbox <code>test-for-hack</code> · Cloud or Local runner</span>
       </div>
-      <div id="stats-row" class="stats-row"></div>
+      <div id="runner-banner" class="tape tape-warn" style="display:none"></div>
+      <div id="stats-row" class="stats-deck"></div>
       <div class="section-head">
         <h2>Agents</h2>
+        <span class="section-line"></span>
       </div>
-      <div id="agents-list"></div>
-      <button class="btn btn-primary" id="btn-new-task" style="margin-top:8px">New Task</button>
+      <div id="agents-list" class="stack"></div>
+      <button class="btn btn-launch" id="btn-new-task">INIT TASK</button>
     </section>
 
-    <!-- New Task -->
     <section id="view-new-task" class="view">
-      <button class="back-link" id="back-home">← Back</button>
-      <div class="section-head"><h2>New Task</h2></div>
+      <button class="back-link" id="back-home"><span class="back-chevron"></span>DECK</button>
+      <div class="section-head">
+        <h2>New Task</h2>
+        <span class="section-line"></span>
+      </div>
 
       <div class="field">
-        <label>GitHub Repository</label>
+        <label class="field-label">Repository</label>
         <div id="repo-suggestions" class="suggestions"></div>
         <div class="repo-picker">
           <div id="repo-selected" class="repo-selected" style="display:none"></div>
           <div class="repo-search-wrap">
-            <input type="text" id="repo-search" placeholder="Search repos or paste owner/repo" autocomplete="off" />
+            <input type="text" id="repo-search" placeholder="owner/repo or search…" autocomplete="off" />
           </div>
           <div id="repo-list" class="repo-list">
-            <div class="repo-empty">Search for a repo or pick a suggestion above</div>
+            <div class="repo-empty">Search or select a suggestion</div>
           </div>
         </div>
-        <p class="hint">Public repos work instantly. Paste e.g. <code>cloudflare/workers-sdk</code></p>
+        <p class="hint">Default target: <code>lakshyashishir/test-for-hack</code></p>
       </div>
 
       <div class="field">
-        <label for="task-description">What should the agent do?</label>
-        <textarea id="task-description" placeholder="Add OAuth2 authentication, update README, fix TypeScript errors in src/…" required></textarea>
+        <label class="field-label">Runner</label>
+        <div class="runner-picker" id="runner-picker">
+          <button type="button" class="runner-opt active" data-runner="cloud">
+            <span class="runner-led"></span>
+            <span class="runner-name">CLOUD</span>
+            <span class="runner-desc">Edge agent</span>
+          </button>
+          <button type="button" class="runner-opt" data-runner="local">
+            <span class="runner-led"></span>
+            <span class="runner-name">LOCAL</span>
+            <span class="runner-desc">Claude Code</span>
+          </button>
+        </div>
+        <p class="hint" id="runner-hint">Cloud — template commits on GitHub. No terminal.</p>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="task-description">Directive</label>
+        <textarea id="task-description" placeholder="Describe the change. Be specific about files and outcome." required></textarea>
       </div>
 
       <div id="task-summary" class="summary-box" style="display:none"></div>
-
-      <button class="btn btn-primary" id="submit-task-btn" disabled>Select a repo to continue</button>
+      <button class="btn btn-launch" id="submit-task-btn" disabled>SELECT REPO</button>
     </section>
 
-    <!-- Tasks -->
     <section id="view-tasks" class="view">
-      <div class="section-head"><h2>Tasks</h2></div>
-      <div id="tasks-list"></div>
+      <div class="section-head">
+        <h2>Tasks</h2>
+        <span class="section-line"></span>
+      </div>
+      <div id="tasks-list" class="stack"></div>
     </section>
 
-    <!-- Approvals -->
     <section id="view-approvals" class="view">
-      <div class="section-head"><h2>Approvals</h2></div>
-      <div id="approvals-list"></div>
+      <div class="section-head">
+        <h2>Approvals</h2>
+        <span class="section-line"></span>
+      </div>
+      <div id="approvals-list" class="stack"></div>
     </section>
 
-    <!-- Logs -->
     <section id="view-logs" class="view">
       <div class="section-head">
-        <h2>Live Logs</h2>
-        <button class="btn-ghost" id="summarize-logs-btn" style="width:auto;padding:6px 12px;font-size:0.75rem">Summarize</button>
+        <h2>Telemetry</h2>
+        <button class="btn-chip" id="summarize-logs-btn">SUMMARIZE</button>
       </div>
       <div id="log-summary" class="summary-box" style="display:none"></div>
       <div id="log-viewer" class="log-panel"></div>
     </section>
 
-    <!-- Agent detail -->
     <section id="view-agent-detail" class="view">
-      <button class="back-link" id="back-agents">← Agents</button>
+      <button class="back-link" id="back-agents"><span class="back-chevron"></span>AGENTS</button>
       <div id="agent-detail-header"></div>
-      <div class="section-head" style="margin-top:20px"><h2>Logs</h2></div>
-      <div id="log-viewer-agent" class="log-panel" style="height:220px;margin-bottom:16px"></div>
-      <div class="section-head"><h2>Tasks</h2></div>
-      <div id="agent-tasks-list"></div>
+      <div class="section-head" style="margin-top:24px">
+        <h2>Stream</h2>
+        <span class="section-line"></span>
+      </div>
+      <div id="log-viewer-agent" class="log-panel log-panel-sm"></div>
+      <div class="section-head">
+        <h2>Queue</h2>
+        <span class="section-line"></span>
+      </div>
+      <div id="agent-tasks-list" class="stack"></div>
     </section>
   </main>
 
-  <nav class="bottom-nav">
+  <nav class="deck-nav" aria-label="Main">
     <button class="nav-btn active" data-view="dashboard">
-      <span class="ico">◉</span>Home
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 10.5L12 4l8 6.5V20a1 1 0 01-1 1h-5v-6H10v6H5a1 1 0 01-1-1v-9.5z"/></svg>
+      <span>Deck</span>
     </button>
     <button class="nav-btn" data-view="tasks">
-      <span class="ico">☰</span>Tasks
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+      <span>Tasks</span>
     </button>
-    <button class="nav-btn" data-view="approvals" style="position:relative">
-      <span class="ico">◆</span>Approve
+    <button class="nav-btn" data-view="approvals">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+      <span>Veto</span>
       <span class="nav-badge" id="approval-badge" style="display:none">0</span>
     </button>
     <button class="nav-btn" data-view="logs">
-      <span class="ico">▸</span>Logs
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 17l6-6-4-4m6 10h10"/></svg>
+      <span>Logs</span>
     </button>
   </nav>
 

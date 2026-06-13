@@ -11,12 +11,22 @@ import {
 import {
   commitFile,
   createBranch,
+  createPullRequest,
   fetchReadmeSnippet,
   fetchRepo,
   getBranchSha,
   listRepoContents,
   type GitHubRepo,
 } from './lib/github';
+import {
+  buildTaskManifest,
+  buildTaskPlan,
+  parseTaskDescription,
+} from './lib/task-plan';
+import {
+  extractReferencedRepo,
+  resolveDeliverables,
+} from './lib/deliverables';
 import type { Env, Task } from './types';
 import { broadcast } from './ws';
 
@@ -44,60 +54,6 @@ async function emitLog(
     message,
     timestamp: log.timestamp,
   });
-}
-
-function fallbackPlan(task: Task, repo: GitHubRepo, files: string[]): string {
-  return `# Nano Task Plan
-
-**Repo:** ${repo.full_name}
-**Task:** ${task.description}
-
-## Repository context
-- Language: ${repo.language ?? 'unknown'}
-- Default branch: ${repo.default_branch}
-- Top-level: ${files.slice(0, 12).join(', ') || 'n/a'}
-
-## Proposed steps
-1. Inspect affected modules and existing patterns
-2. Implement: ${task.description}
-3. Run project tests / lint
-4. Open PR for review
-`;
-}
-
-async function generateTaskPlan(
-  env: Env,
-  task: Task,
-  repo: GitHubRepo,
-  files: string[],
-  readme?: string
-): Promise<string> {
-  const prompt = `Write a concise engineering plan in markdown for this coding task.
-
-Repo: ${repo.full_name}
-Language: ${repo.language ?? 'unknown'}
-Task: ${task.description}
-Top-level paths: ${files.slice(0, 20).join(', ')}
-${readme ? `README excerpt:\n${readme.slice(0, 600)}` : ''}
-
-Include: brief summary, files/areas to change, numbered implementation steps, and risks. Under 80 lines.`;
-
-  try {
-    const response = await env.AI.run('@cf/meta/llama-3-8b-instruct', {
-      messages: [
-        { role: 'system', content: 'You write clear, actionable engineering task plans in markdown only.' },
-        { role: 'user', content: prompt },
-      ],
-    });
-    const text =
-      typeof response === 'object' && response !== null && 'response' in response
-        ? String((response as { response: string }).response)
-        : String(response);
-    const trimmed = text.trim();
-    return trimmed.length > 80 ? trimmed : fallbackPlan(task, repo, files);
-  } catch {
-    return fallbackPlan(task, repo, files);
-  }
 }
 
 export async function ensureBuiltinAgent(env: Env): Promise<{ id: string; apiKey: string }> {
@@ -197,6 +153,18 @@ export async function runBuiltinTask(env: Env, taskId: string, githubToken?: str
   await sleep(400);
 
   const proposedBranch = `nano/${taskId.slice(0, 8)}`;
+  const refRepo = extractReferencedRepo(task.description);
+  let contextReadme: string | undefined;
+  if (refRepo && githubToken) {
+    const [owner, name] = refRepo.split('/');
+    if (owner && name) {
+      contextReadme = (await fetchReadmeSnippet(owner, name, githubToken)) ?? undefined;
+    }
+  }
+  const deliverables = resolveDeliverables(task.description, repo, {
+    contextRepo: refRepo,
+    contextReadme,
+  });
   const targetFiles = files.filter((f) =>
     /^(src|lib|app|packages|server|client)/i.test(f) || /\.(ts|js|py|go|rs)$/i.test(f)
   ).slice(0, 5);
@@ -211,7 +179,9 @@ export async function runBuiltinTask(env: Env, taskId: string, githubToken?: str
   );
 
   const approvalAction = canWrite
-    ? `Create branch "${proposedBranch}" and commit NANO-TASK.md plan`
+    ? deliverables.length
+      ? `Create branch "${proposedBranch}" and add ${deliverables.map((d) => d.path).join(', ')}`
+      : `Create branch "${proposedBranch}" on ${repo.full_name}`
     : `Analyze "${repo.full_name}" (read-only — pick a repo you own to create branches)`;
 
   await updateTask(env.DB, taskId, { status: 'waiting_approval' });
@@ -224,7 +194,11 @@ export async function runBuiltinTask(env: Env, taskId: string, githubToken?: str
       url: repo.html_url,
       action: approvalAction,
       task: task.description,
-      affectedPaths: targetFiles.length ? targetFiles : files.slice(0, 5),
+      affectedPaths: deliverables.length
+        ? deliverables.map((d) => d.path)
+        : targetFiles.length
+          ? targetFiles
+          : files.slice(0, 5),
       branch: proposedBranch,
       baseBranch: branch,
       canWrite,
@@ -263,10 +237,35 @@ export async function runBuiltinTask(env: Env, taskId: string, githubToken?: str
   }
 
   await updateTask(env.DB, taskId, { status: 'running' });
-  await emitLog(env, agentId, taskId, 'Approved — generating plan with Workers AI…', 'info');
+  await emitLog(env, agentId, taskId, 'Approved — building task plan (local, no AI calls)…', 'info');
 
-  const plan = await generateTaskPlan(env, task, repo, files, readme);
-  await emitLog(env, agentId, taskId, 'Task plan generated', 'info');
+  const plan = buildTaskPlan(task, repo, files, readme ?? undefined);
+  const parsed = parseTaskDescription(task.description);
+  await emitLog(env, agentId, taskId, `Plan ready — ${parsed.priority} priority, ~${parsed.estimatedMinutes}min`, 'info');
+  if (deliverables.length) {
+    await emitLog(
+      env,
+      agentId,
+      taskId,
+      `Creating: ${deliverables.map((d) => d.path).join(', ')}`,
+      'info'
+    );
+  }
+
+  if (canWrite && !deliverables.length) {
+    await emitLog(env, agentId, taskId, 'Could not infer files to create for this task', 'error');
+    await updateTask(env.DB, taskId, {
+      status: 'failed',
+      completed_at: Date.now(),
+      result: JSON.stringify({
+        summary: `Could not infer files to create for: ${task.description}`,
+        note: 'Try naming a file explicitly, e.g. "add hack.md and say HI" or "write a html ui"',
+      }),
+    });
+    await updateAgentStatus(env.DB, agentId, 'idle');
+    await broadcast(env, { type: 'agent_status', agentId, status: 'idle' });
+    return;
+  }
 
   if (!canWrite || !githubToken) {
     await emitLog(
@@ -305,28 +304,70 @@ export async function runBuiltinTask(env: Env, taskId: string, githubToken?: str
     const branchUrl = await createBranch(repo.owner, repo.repo, proposedBranch, baseSha, githubToken);
     await emitLog(env, agentId, taskId, `Branch ready: ${proposedBranch}`, 'info', { branchUrl });
 
-    await emitLog(env, agentId, taskId, 'Committing NANO-TASK.md…');
-    const commitUrl = await commitFile(
+    const committedFiles: string[] = [];
+
+    for (const file of deliverables) {
+      await emitLog(env, agentId, taskId, `Writing ${file.path}…`);
+      await commitFile(
+        repo.owner,
+        repo.repo,
+        file.path,
+        file.content,
+        proposedBranch,
+        `nano: add ${file.path}`,
+        githubToken
+      );
+      committedFiles.push(file.path);
+    }
+
+    const manifest = buildTaskManifest(task, repo, proposedBranch, targetFiles, deliverables);
+    await commitFile(
       repo.owner,
       repo.repo,
-      'NANO-TASK.md',
-      plan,
+      `.nano/task-${taskId.slice(0, 8)}.json`,
+      manifest,
       proposedBranch,
-      `nano: add task plan — ${task.description.slice(0, 72)}`,
+      `nano: task manifest`,
       githubToken
     );
-    await emitLog(env, agentId, taskId, 'Commit pushed to GitHub', 'info', { commitUrl, branchUrl });
+
+    await emitLog(env, agentId, taskId, 'Commits pushed to GitHub', 'info', {
+      branchUrl,
+      files: committedFiles,
+    });
+
+    let prUrl: string | undefined;
+    try {
+      await emitLog(env, agentId, taskId, 'Opening pull request…');
+      const prTitle = `nano: ${task.description.slice(0, 80)}`;
+      const fileList = committedFiles.map((f) => `- \`${f}\``).join('\n');
+      const prBody = `## Nano agent\n\n**Task:** ${task.description}\n\n**Files added:**\n${fileList}`;
+      prUrl = await createPullRequest(
+        repo.owner,
+        repo.repo,
+        prTitle,
+        proposedBranch,
+        branch,
+        prBody,
+        githubToken
+      );
+      await emitLog(env, agentId, taskId, 'Pull request created', 'info', { prUrl });
+    } catch (err) {
+      await emitLog(env, agentId, taskId, `PR skipped: ${(err as Error).message}`, 'warning');
+    }
 
     const result = {
-      summary: `Created ${proposedBranch} on ${repo.full_name} with implementation plan`,
+      summary: prUrl
+        ? `Opened PR adding ${committedFiles.join(', ')} on ${repo.full_name}`
+        : `Created ${proposedBranch} on ${repo.full_name}`,
       repo: repo.full_name,
       url: repo.html_url,
       language: repo.language,
       branch: proposedBranch,
       branchUrl,
-      commitUrl,
+      prUrl,
+      files: committedFiles,
       filesScanned: files.length,
-      planPreview: plan.slice(0, 200),
     };
 
     const completed = await updateTask(env.DB, taskId, {

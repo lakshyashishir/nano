@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   github_repo TEXT,
   github_branch TEXT,
   github_url TEXT,
+  runner TEXT DEFAULT 'cloud',
   created_at INTEGER NOT NULL,
   started_at INTEGER,
   completed_at INTEGER,

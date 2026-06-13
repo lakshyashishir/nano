@@ -1,9 +1,20 @@
 import { Hono } from 'hono';
-import { createAgent, getAgent, listAgents, toAgentPublic, updateAgentStatus } from '../db/queries';
-import type { Env } from '../types';
+import { createAgent, getAgent, listAgents, toAgentPublic, updateAgentLastActive, updateAgentStatus } from '../db/queries';
+import { requireAgentAuth } from '../middleware/auth';
+import type { Agent, Env } from '../types';
 import { broadcast } from '../ws';
 
-export const agentsApi = new Hono<{ Bindings: Env }>();
+export const agentsApi = new Hono<{ Bindings: Env; Variables: { agent: Agent } }>();
+
+agentsApi.post('/heartbeat', requireAgentAuth, async (c) => {
+  const agent = c.get('agent');
+  await updateAgentLastActive(c.env.DB, agent.id);
+  const updated = await getAgent(c.env.DB, agent.id);
+  return c.json({
+    ok: true,
+    agent: updated ? toAgentPublic(updated) : null,
+  });
+});
 
 agentsApi.get('/', async (c) => {
   const agents = await listAgents(c.env.DB);

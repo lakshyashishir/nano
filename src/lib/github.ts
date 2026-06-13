@@ -164,23 +164,6 @@ export async function createBranch(
   return `https://github.com/${owner}/${repo}/tree/${branchName}`;
 }
 
-export async function getFileSha(
-  owner: string,
-  repo: string,
-  path: string,
-  branch: string,
-  token: string
-): Promise<string | null> {
-  const res = await githubFetch(
-    `/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`,
-    token
-  );
-  if (res.status === 404) return null;
-  if (!res.ok) return null;
-  const data = await res.json() as { sha: string };
-  return data.sha;
-}
-
 export function toBase64(content: string): string {
   const bytes = new TextEncoder().encode(content);
   let binary = '';
@@ -221,6 +204,54 @@ export async function commitFile(
   }
   const data = await res.json() as { commit: { html_url: string } };
   return data.commit.html_url;
+}
+
+/** Seed an empty GitHub repo with an initial README on main */
+export async function seedEmptyRepo(
+  owner: string,
+  repo: string,
+  token: string
+): Promise<boolean> {
+  const res = await githubFetch(`/repos/${owner}/${repo}/commits?per_page=1`, token);
+  if (!res.ok) throw new Error('Could not read repo');
+  const commits = await res.json() as unknown[];
+  if (Array.isArray(commits) && commits.length > 0) return false;
+
+  const readme = `# ${repo}
+
+Sandbox repository for [Nano](https://nano.lakshyashishir1.workers.dev) agent PR testing.
+
+Branches and PRs created here are safe to experiment with.
+`;
+  await commitFile(owner, repo, 'README.md', readme, 'main', 'nano: init test sandbox', token);
+  return true;
+}
+
+export async function createPullRequest(
+  owner: string,
+  repo: string,
+  title: string,
+  headBranch: string,
+  baseBranch: string,
+  body: string,
+  token: string
+): Promise<string> {
+  const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'Nano-Agent/0.1',
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ title, head: headBranch, base: baseBranch, body }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { message?: string };
+    throw new Error(err.message || 'Failed to create pull request');
+  }
+  const data = await res.json() as { html_url: string; number: number };
+  return data.html_url;
 }
 
 export async function listUserRepos(token: string): Promise<GitHubRepo[]> {

@@ -19,7 +19,3 @@ bindings = [
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["AgentSession"]
-
-[ai]
-binding = "AI"
-remote = true
